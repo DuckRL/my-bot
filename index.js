@@ -21,20 +21,11 @@ client.on('messageCreate', message => {
 });
 
 client.login(process.env.TOKEN);
-client.once("ready", () => {
+
+client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 
-    const activities = [
-        "Managed by Duck",
-        "THP Server",
-        "ERLC Roleplay"
-    ];
-
-    let i = 0;
-
-    setInterval(() => {
-        client.user.setActivity(activities[i], { type: 0 });
-        i = (i + 1) % activities.length;
-    }, 10000);
+    client.user.setActivity("Made by Duck", {
+        type: 1
+    });
 });
-
