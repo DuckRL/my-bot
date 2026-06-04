@@ -9,25 +9,55 @@ const client = new Client({
     ]
 });
 
+// =====================
 // CONFIG
+// =====================
 const HQ_ROLE_ID = "1503904276550779054";
 const LOG_CHANNEL_ID = "1503904276999831581";
 
+const DOD_ROLE_ID = "1504131960510091365";
+const DOD_BYPASS_ROLE_ID = "1511909696091455509";
+
+// =====================
+// READY EVENT
+// =====================
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 
     client.user.setActivity("Made by Duck");
 });
 
+// =====================
+// MESSAGE HANDLER
+// =====================
 client.on('messageCreate', async (message) => {
 
     if (message.author.bot) return;
     if (!message.guild) return;
 
+    // =====================
+    // ANTI DOD PING SYSTEM
+    // =====================
+    if (message.mentions.roles.has(DOD_ROLE_ID)) {
+
+        const hasBypass = message.member.roles.cache.has(DOD_BYPASS_ROLE_ID);
+
+        if (!hasBypass) {
+
+            message.delete().catch(() => {});
+
+            message.author.send(
+                "⚠️ **Verbal Warning**\n\nYou are not allowed to ping Department of Defense."
+            ).catch(() => {});
+        }
+    }
+
+    // =====================
     // BLACKLIST COMMAND
+    // =====================
     if (message.content.startsWith('!blacklist')) {
 
-        // permission check
+        // HQ permission check
         if (!message.member.roles.cache.has(HQ_ROLE_ID)) {
             return message.reply("❌ You do not have permission to use this command.");
         }
@@ -71,7 +101,6 @@ client.on('messageCreate', async (message) => {
             timestamp: new Date()
         };
 
-        // ONLY SEND TO LOG CHANNEL (NOT CHAT)
         const logChannel = message.guild.channels.cache.get(LOG_CHANNEL_ID);
 
         if (logChannel) {
@@ -82,4 +111,7 @@ client.on('messageCreate', async (message) => {
     }
 });
 
+// =====================
+// LOGIN
+// =====================
 client.login(process.env.TOKEN);
