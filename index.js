@@ -9,34 +9,34 @@ const client = new Client({
     ]
 });
 
+// CONFIG
 const HQ_ROLE_ID = "1503904276550779054";
 const LOG_CHANNEL_ID = "1503904276999831581";
 
-client.once('clientReady', () => {
+client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
 
     client.user.setActivity("Made by Duck");
 });
 
 client.on('messageCreate', async (message) => {
+
     if (message.author.bot) return;
     if (!message.guild) return;
 
     // BLACKLIST COMMAND
     if (message.content.startsWith('!blacklist')) {
 
-        console.log("BLACKLIST COMMAND TRIGGERED");
-
         // permission check
         if (!message.member.roles.cache.has(HQ_ROLE_ID)) {
-            return message.reply("❌ You do not have permission.");
+            return message.reply("❌ You do not have permission to use this command.");
         }
 
         const args = message.content.split(' ').slice(1);
         const user = message.mentions.users.first();
 
         if (!user) {
-            return message.reply("❌ Mention a user.");
+            return message.reply("❌ Please mention a user to blacklist.");
         }
 
         const reason = args.slice(1).join(' ') || "No reason provided";
@@ -71,11 +71,13 @@ client.on('messageCreate', async (message) => {
             timestamp: new Date()
         };
 
-        await message.channel.send({ embeds: [embed] });
-
+        // ONLY SEND TO LOG CHANNEL (NOT CHAT)
         const logChannel = message.guild.channels.cache.get(LOG_CHANNEL_ID);
+
         if (logChannel) {
             logChannel.send({ embeds: [embed] });
+        } else {
+            message.reply("❌ Log channel not found.");
         }
     }
 });
