@@ -1,4 +1,5 @@
 const { Client, GatewayIntentBits } = require('discord.js');
+const fs = require('fs');
 
 const client = new Client({
     intents: [
@@ -13,36 +14,47 @@ const client = new Client({
 // CONFIG
 // ======================
 const BYPASS_ROLE_ID = "1510749036179755101";
+const DATA_FILE = "./logs.json";
 
-// in-memory strike storage (resets if bot restarts)
-const strikes = new Map();
+// ======================
+// LOAD / SAVE DATA
+// ======================
+function loadData() {
+    if (!fs.existsSync(DATA_FILE)) return {};
+    return JSON.parse(fs.readFileSync(DATA_FILE));
+}
 
+function saveData(data) {
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+}
+
+// ensure file exists
+if (!fs.existsSync(DATA_FILE)) {
+    fs.writeFileSync(DATA_FILE, "{}");
+}
+
+const strikes = new Map(loadData());
+
+// ======================
+// READY
+// ======================
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity('Managed by Duck');
 });
 
 // ======================
-// MUTE FUNCTION (5 MINUTES)
+// MUTE FUNCTION
 // ======================
 async function muteMember(member, timeMs = 300000) {
-    try {
-        const muteRole = member.guild.roles.cache.find(r => r.name === "Muted");
+    const muteRole = member.guild.roles.cache.find(r => r.name === "Muted");
+    if (!muteRole) return;
 
-        if (!muteRole) {
-            console.log("No Muted role found!");
-            return;
-        }
+    await member.roles.add(muteRole);
 
-        await member.roles.add(muteRole);
-
-        setTimeout(async () => {
-            await member.roles.remove(muteRole).catch(() => {});
-        }, timeMs);
-
-    } catch (err) {
-        console.log("Mute error:", err);
-    }
+    setTimeout(() => {
+        member.roles.remove(muteRole).catch(() => {});
+    }, timeMs);
 }
 
 // ======================
@@ -55,71 +67,92 @@ client.on('messageCreate', async (message) => {
 
     const member = message.member;
     const hasBypass = member.roles.cache.has(BYPASS_ROLE_ID);
-
     if (hasBypass) return;
 
     const userId = message.author.id;
 
+    let userData = strikes.get(userId) || {
+        strikes: 0,
+        warnings: 0,
+        mutes: 0,
+        kicks: 0,
+        bans: 0
+    };
+
     const linkRegex = /(https?:\/\/[^\s]+)/gi;
-    const isLink = linkRegex.test(message.content);
-
-    const isPingSpam =
-        message.mentions.everyone ||
-        message.content.includes('@everyone') ||
-        message.content.includes('@here');
-
-    const isSpam = message.content.split(' ').length > 30;
 
     let violation = false;
     let reason = "";
 
-    // ======================
-    // DETECT VIOLATIONS
-    // ======================
-    if (isLink) {
+    if (linkRegex.test(message.content)) {
         violation = true;
         reason = "Sending links";
     }
 
-    if (isPingSpam) {
+    if (message.mentions.everyone || message.content.includes('@here')) {
         violation = true;
         reason = "Mass pinging";
     }
 
-    if (isSpam) {
+    if (message.content.split(' ').length > 30) {
         violation = true;
         reason = "Spam detected";
     }
 
-    if (!violation) return;
+    if (violation) {
 
-    // DELETE MESSAGE
-    message.delete().catch(() => {});
+        message.delete().catch(() => {});
 
-    // STRIKE SYSTEM
-    let userStrikes = strikes.get(userId) || 0;
-    userStrikes++;
-    strikes.set(userId, userStrikes);
-
-    // WARNING MESSAGE IN CHAT
-    message.channel.send(
-        `⚠️ <@${userId}> Warning (${userStrikes}/3): ${reason}`
-    );
-
-    // ======================
-    // 3 STRIKES = MUTE
-    // ======================
-    if (userStrikes >= 3) {
-
-        const memberObj = message.member;
+        userData.strikes += 1;
+        userData.warnings += 1;
 
         message.channel.send(
-            `🔇 <@${userId}> has been muted for 5 minutes (3 strikes reached).`
+            `⚠️ <@${userId}> Warning (${userData.strikes}/3): ${reason}`
         );
 
-        await muteMember(memberObj, 300000);
+        // 3 STRIKES = MUTE
+        if (userData.strikes >= 3) {
+            userData.mutes += 1;
 
-        strikes.set(userId, 0); // reset after mute
+            message.channel.send(
+                `🔇 <@${userId}> muted for 5 minutes (3 strikes reached).`
+            );
+
+            await muteMember(member, 300000);
+
+            userData.strikes = 0;
+        }
+
+        strikes.set(userId, userData);
+        saveData(Object.fromEntries(strikes));
+    }
+
+    // ======================
+    // !mlogs COMMAND
+    // ======================
+    if (message.content.startsWith('!mlogs')) {
+
+        const target = message.mentions.users.first() || message.author;
+        const data = strikes.get(target.id);
+
+        if (!data) {
+            return message.channel.send(`📊 No logs found for ${target.tag}`);
+        }
+
+        const embed = {
+            color: 0x0099ff,
+            title: `📊 Moderation Logs - ${target.tag}`,
+            fields: [
+                { name: "Warnings", value: `${data.warnings}`, inline: true },
+                { name: "Strikes", value: `${data.strikes}`, inline: true },
+                { name: "Mutes", value: `${data.mutes}`, inline: true },
+                { name: "Kicks", value: `${data.kicks}`, inline: true },
+                { name: "Bans", value: `${data.bans}`, inline: true }
+            ],
+            timestamp: new Date()
+        };
+
+        message.channel.send({ embeds: [embed] });
     }
 });
 
