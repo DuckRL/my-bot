@@ -18,15 +18,14 @@ const MUTE_ROLE_ID = "1512296321334378567";
 const DATA_FILE = "./logs.json";
 
 // ======================
-// SAFE FILE SYSTEM
+// SAFE DB
 // ======================
 function loadData() {
     try {
         if (!fs.existsSync(DATA_FILE)) return {};
-        const data = fs.readFileSync(DATA_FILE, 'utf8');
-        return data ? JSON.parse(data) : {};
-    } catch (err) {
-        console.log("LOAD ERROR:", err);
+        const raw = fs.readFileSync(DATA_FILE, 'utf8');
+        return raw ? JSON.parse(raw) : {};
+    } catch {
         return {};
     }
 }
@@ -42,7 +41,18 @@ function saveData(data) {
 let logs = loadData();
 
 // ======================
-// READY EVENT
+// CASE SYSTEM
+// ======================
+function generateCaseNumber() {
+    const count = Object.values(logs).reduce((a, b) => {
+        return a + (b.cases ? b.cases.length : 0);
+    }, 0);
+
+    return `CASE-${String(count + 1).padStart(4, '0')}`;
+}
+
+// ======================
+// READY
 // ======================
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
@@ -50,124 +60,160 @@ client.once('ready', () => {
 });
 
 // ======================
-// MUTE SYSTEM
+// MUTE FUNCTION
 // ======================
 async function muteMember(member, timeMs = 300000) {
-    try {
-        const role = member.guild.roles.cache.get(MUTE_ROLE_ID);
-        if (!role) return;
+    const role = member.guild.roles.cache.get(MUTE_ROLE_ID);
+    if (!role) return;
 
-        await member.roles.add(role);
+    await member.roles.add(role);
 
-        setTimeout(() => {
-            member.roles.remove(role).catch(() => {});
-        }, timeMs);
-
-    } catch (err) {
-        console.log("Mute error:", err);
-    }
+    setTimeout(() => {
+        member.roles.remove(role).catch(() => {});
+    }, timeMs);
 }
 
 // ======================
-// ANTI-ABUSE SYSTEM
+// HELPERS
+// ======================
+function getUser(id) {
+    if (!logs[id]) {
+        logs[id] = {
+            strikes: 0,
+            warnings: 0,
+            mutes: 0,
+            kicks: 0,
+            bans: 0,
+            cases: []
+        };
+    }
+    return logs[id];
+}
+
+// ======================
+// MESSAGE SYSTEM
 // ======================
 client.on('messageCreate', async (message) => {
 
-    if (message.author.bot) return;
-    if (!message.guild) return;
+    if (message.author.bot || !message.guild) return;
 
     const member = message.member;
     const userId = message.author.id;
 
-    const hasBypass = member.roles.cache.has(BYPASS_ROLE_ID);
-    if (hasBypass) return;
-
-    let user = logs[userId] || {
-        strikes: 0,
-        warnings: 0,
-        mutes: 0,
-        kicks: 0,
-        bans: 0
-    };
+    if (member.roles.cache.has(BYPASS_ROLE_ID)) return;
 
     const linkRegex = /(https?:\/\/[^\s]+)/gi;
 
     let reason = null;
 
-    if (linkRegex.test(message.content)) {
-        reason = "Sending links";
-    }
-
-    if (message.mentions.everyone || message.content.includes("@here")) {
-        reason = "Mass pinging";
-    }
-
-    if (message.content.split(' ').length > 30) {
-        reason = "Spam detected";
-    }
+    if (linkRegex.test(message.content)) reason = "Sending links";
+    if (message.mentions.everyone || message.content.includes("@here")) reason = "Mass pinging";
+    if (message.content.split(' ').length > 30) reason = "Spam detected";
 
     if (!reason) return;
 
-    // DELETE MESSAGE
     message.delete().catch(() => {});
 
-    // UPDATE STATS
-    user.strikes += 1;
-    user.warnings += 1;
+    const user = getUser(userId);
 
-    message.channel.send(
-        `⚠️ <@${userId}> Warning (${user.strikes}/3): ${reason}`
-    );
+    user.strikes++;
+    user.warnings++;
 
-    // MUTE AT 3 STRIKES
+    const caseId = generateCaseNumber();
+    user.cases.push(`${caseId}: WARNING - ${reason}`);
+
+    message.channel.send(`⚠️ <@${userId}> Warning (${user.strikes}/3): ${reason} | ${caseId}`);
+
     if (user.strikes >= 3) {
 
-        user.mutes += 1;
+        user.mutes++;
+        const muteCase = generateCaseNumber();
+        user.cases.push(`${muteCase}: MUTE (5m) - 3 strikes reached`);
 
-        message.channel.send(
-            `🔇 <@${userId}> muted for 5 minutes (3 strikes reached).`
-        );
+        message.channel.send(`🔇 <@${userId}> muted for 5 minutes | ${muteCase}`);
 
         await muteMember(member, 300000);
 
         user.strikes = 0;
     }
 
-    logs[userId] = user;
     saveData(logs);
 });
 
 // ======================
-// !MLOGS COMMAND
+// MLOGS SYSTEM (ADD/REMOVE)
 // ======================
 client.on('messageCreate', async (message) => {
 
-    if (message.author.bot) return;
-    if (!message.guild) return;
-
     if (!message.content.startsWith('!mlogs')) return;
 
-    const target = message.mentions.users.first() || message.author;
-    const data = logs[target.id];
+    const args = message.content.split(' ');
 
-    if (!data) {
-        return message.channel.send(`📊 No logs found for ${target.tag}`);
+    const action = args[1]; // add/remove/view
+    const type = args[2];   // strike/warn/kick/ban
+    const target = message.mentions.users.first();
+
+    // ======================
+    // VIEW LOGS
+    // ======================
+    if (!action || action === "view") {
+
+        const user = target || message.author;
+        const data = logs[user.id];
+
+        if (!data) return message.channel.send("No logs found.");
+
+        return message.channel.send({
+            embeds: [{
+                color: 0x0099ff,
+                title: `📊 Logs - ${user.tag}`,
+                fields: [
+                    { name: "Strikes", value: `${data.strikes}`, inline: true },
+                    { name: "Warnings", value: `${data.warnings}`, inline: true },
+                    { name: "Mutes", value: `${data.mutes}`, inline: true },
+                    { name: "Kicks", value: `${data.kicks}`, inline: true },
+                    { name: "Bans", value: `${data.bans}`, inline: true },
+                ],
+                footer: {
+                    text: "Managed by Duck"
+                }
+            }]
+        });
     }
 
-    const embed = {
-        color: 0x0099ff,
-        title: `📊 Moderation Logs - ${target.tag}`,
-        fields: [
-            { name: "Warnings", value: `${data.warnings}`, inline: true },
-            { name: "Strikes", value: `${data.strikes}`, inline: true },
-            { name: "Mutes", value: `${data.mutes}`, inline: true },
-            { name: "Kicks", value: `${data.kicks}`, inline: true },
-            { name: "Bans", value: `${data.bans}`, inline: true }
-        ],
-        timestamp: new Date()
-    };
+    // ======================
+    // ADD / REMOVE SYSTEM
+    // ======================
+    const user = getUser(target?.id);
+    const caseId = generateCaseNumber();
 
-    message.channel.send({ embeds: [embed] });
+    if (action === "add") {
+
+        if (type === "strike") user.strikes++;
+        if (type === "warn") user.warnings++;
+        if (type === "kick") user.kicks++;
+        if (type === "ban") user.bans++;
+
+        user.cases.push(`${caseId}: MANUAL ADD - ${type.toUpperCase()}`);
+
+        saveData(logs);
+
+        return message.channel.send(`✅ Added ${type} to ${target.tag} | ${caseId}`);
+    }
+
+    if (action === "remove") {
+
+        if (type === "strike" && user.strikes > 0) user.strikes--;
+        if (type === "warn" && user.warnings > 0) user.warnings--;
+        if (type === "kick" && user.kicks > 0) user.kicks--;
+        if (type === "ban" && user.bans > 0) user.bans--;
+
+        user.cases.push(`${caseId}: MANUAL REMOVE - ${type.toUpperCase()}`);
+
+        saveData(logs);
+
+        return message.channel.send(`🧹 Removed ${type} from ${target.tag} | ${caseId}`);
+    }
 });
 
 client.login(process.env.TOKEN);
