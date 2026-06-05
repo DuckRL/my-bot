@@ -8,40 +8,66 @@ const client = new Client({
     ]
 });
 
+// ======================
+// CONFIG
+// ======================
+const BYPASS_ROLE_ID = "1510749036179755101";
+
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
-
     client.user.setActivity('Managed by Duck');
 });
 
+// ======================
+// MESSAGE DEFENSE SYSTEM
+// ======================
 client.on('messageCreate', async (message) => {
 
-    // ignore bots
     if (message.author.bot) return;
     if (!message.guild) return;
 
-    // ======================
-    // !arm COMMAND
-    // ======================
-    if (message.content === '!arm') {
+    const member = message.member;
 
-        const embed = {
-            color: 0x00ff00,
-            title: "🚨 Tennessee Highway Patrol Armed",
-            description: "Status: **READY TO DEFEND**",
-            fields: [
-                {
-                    name: "System Status",
-                    value: "✔ Ban Ready\n✔ Anti-Spam Ready\n✔ Active Defense Mode"
-                }
-            ],
-            footer: {
-                text: "Managed by Duck"
-            },
-            timestamp: new Date()
-        };
+    // If user has bypass role → ignore all checks
+    const hasBypass = member.roles.cache.has(BYPASS_ROLE_ID);
 
-        message.channel.send({ embeds: [embed] });
+    // ======================
+    // LINK DETECTION
+    // ======================
+    const linkRegex = /(https?:\/\/[^\s]+)/gi;
+
+    if (!hasBypass && linkRegex.test(message.content)) {
+        message.reply("⚠️ Warning: Sending links is not allowed.");
+        return;
+    }
+
+    // ======================
+    // MASS PING DETECTION
+    // ======================
+    if (!hasBypass) {
+
+        if (
+            message.mentions.everyone ||
+            message.content.includes('@everyone') ||
+            message.content.includes('@here')
+        ) {
+            message.reply("⚠️ Warning: Mass pings are not allowed.");
+            return;
+        }
+    }
+
+    // ======================
+    // BASIC SPAM DETECTION
+    // ======================
+    if (!hasBypass) {
+
+        const words = message.content.split(' ');
+
+        // spam = repeated message spam (simple version)
+        if (words.length > 30) {
+            message.reply("⚠️ Warning: Possible spam detected.");
+            return;
+        }
     }
 });
 
