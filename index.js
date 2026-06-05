@@ -17,26 +17,32 @@ const BYPASS_ROLE_ID = "1510749036179755101";
 const DATA_FILE = "./logs.json";
 
 // ======================
-// LOAD / SAVE DATA
+// SAFE DATA HANDLING
 // ======================
 function loadData() {
-    if (!fs.existsSync(DATA_FILE)) return {};
-    return JSON.parse(fs.readFileSync(DATA_FILE));
+    try {
+        if (!fs.existsSync(DATA_FILE)) return {};
+        const raw = fs.readFileSync(DATA_FILE, 'utf8');
+        return raw ? JSON.parse(raw) : {};
+    } catch (err) {
+        console.log("LOAD ERROR:", err);
+        return {};
+    }
 }
 
 function saveData(data) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    } catch (err) {
+        console.log("SAVE ERROR:", err);
+    }
 }
 
-// ensure file exists
-if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, "{}");
-}
-
-const strikes = new Map(loadData());
+// load database
+let strikes = loadData();
 
 // ======================
-// READY
+// READY EVENT
 // ======================
 client.once('ready', () => {
     console.log(`Logged in as ${client.user.tag}`);
@@ -47,18 +53,23 @@ client.once('ready', () => {
 // MUTE FUNCTION
 // ======================
 async function muteMember(member, timeMs = 300000) {
-    const muteRole = member.guild.roles.cache.find(r => r.name === "Muted");
-    if (!muteRole) return;
+    try {
+        const muteRole = member.guild.roles.cache.find(r => r.name === "Muted");
+        if (!muteRole) return;
 
-    await member.roles.add(muteRole);
+        await member.roles.add(muteRole);
 
-    setTimeout(() => {
-        member.roles.remove(muteRole).catch(() => {});
-    }, timeMs);
+        setTimeout(() => {
+            member.roles.remove(muteRole).catch(() => {});
+        }, timeMs);
+
+    } catch (err) {
+        console.log("Mute error:", err);
+    }
 }
 
 // ======================
-// MESSAGE SYSTEM
+// MESSAGE SYSTEM (ANTI-ABUSE)
 // ======================
 client.on('messageCreate', async (message) => {
 
@@ -71,7 +82,7 @@ client.on('messageCreate', async (message) => {
 
     const userId = message.author.id;
 
-    let userData = strikes.get(userId) || {
+    let userData = strikes[userId] || {
         strikes: 0,
         warnings: 0,
         mutes: 0,
@@ -84,76 +95,87 @@ client.on('messageCreate', async (message) => {
     let violation = false;
     let reason = "";
 
+    // LINK CHECK
     if (linkRegex.test(message.content)) {
         violation = true;
         reason = "Sending links";
     }
 
-    if (message.mentions.everyone || message.content.includes('@here')) {
+    // MASS PING CHECK
+    if (message.mentions.everyone || message.content.includes("@here")) {
         violation = true;
         reason = "Mass pinging";
     }
 
+    // BASIC SPAM CHECK
     if (message.content.split(' ').length > 30) {
         violation = true;
         reason = "Spam detected";
     }
 
-    if (violation) {
+    if (!violation) return;
 
-        message.delete().catch(() => {});
+    // DELETE MESSAGE
+    message.delete().catch(() => {});
 
-        userData.strikes += 1;
-        userData.warnings += 1;
+    // UPDATE STATS
+    userData.strikes += 1;
+    userData.warnings += 1;
+
+    message.channel.send(
+        `⚠️ <@${userId}> Warning (${userData.strikes}/3): ${reason}`
+    );
+
+    // 3 STRIKES = MUTE
+    if (userData.strikes >= 3) {
+
+        userData.mutes += 1;
 
         message.channel.send(
-            `⚠️ <@${userId}> Warning (${userData.strikes}/3): ${reason}`
+            `🔇 <@${userId}> muted for 5 minutes (3 strikes reached).`
         );
 
-        // 3 STRIKES = MUTE
-        if (userData.strikes >= 3) {
-            userData.mutes += 1;
+        await muteMember(member, 300000);
 
-            message.channel.send(
-                `🔇 <@${userId}> muted for 5 minutes (3 strikes reached).`
-            );
-
-            await muteMember(member, 300000);
-
-            userData.strikes = 0;
-        }
-
-        strikes.set(userId, userData);
-        saveData(Object.fromEntries(strikes));
+        userData.strikes = 0;
     }
 
-    // ======================
-    // !mlogs COMMAND
-    // ======================
-    if (message.content.startsWith('!mlogs')) {
+    // SAVE DATA
+    strikes[userId] = userData;
+    saveData(strikes);
+});
 
-        const target = message.mentions.users.first() || message.author;
-        const data = strikes.get(target.id);
+// ======================
+// !MLOGS COMMAND
+// ======================
+client.on('messageCreate', async (message) => {
 
-        if (!data) {
-            return message.channel.send(`📊 No logs found for ${target.tag}`);
-        }
+    if (message.author.bot) return;
+    if (!message.guild) return;
 
-        const embed = {
-            color: 0x0099ff,
-            title: `📊 Moderation Logs - ${target.tag}`,
-            fields: [
-                { name: "Warnings", value: `${data.warnings}`, inline: true },
-                { name: "Strikes", value: `${data.strikes}`, inline: true },
-                { name: "Mutes", value: `${data.mutes}`, inline: true },
-                { name: "Kicks", value: `${data.kicks}`, inline: true },
-                { name: "Bans", value: `${data.bans}`, inline: true }
-            ],
-            timestamp: new Date()
-        };
+    if (!message.content.startsWith('!mlogs')) return;
 
-        message.channel.send({ embeds: [embed] });
+    const target = message.mentions.users.first() || message.author;
+    const data = strikes[target.id];
+
+    if (!data) {
+        return message.channel.send(`📊 No logs found for ${target.tag}`);
     }
+
+    const embed = {
+        color: 0x0099ff,
+        title: `📊 Moderation Logs - ${target.tag}`,
+        fields: [
+            { name: "Warnings", value: `${data.warnings}`, inline: true },
+            { name: "Strikes", value: `${data.strikes}`, inline: true },
+            { name: "Mutes", value: `${data.mutes}`, inline: true },
+            { name: "Kicks", value: `${data.kicks}`, inline: true },
+            { name: "Bans", value: `${data.bans}`, inline: true }
+        ],
+        timestamp: new Date()
+    };
+
+    message.channel.send({ embeds: [embed] });
 });
 
 client.login(process.env.TOKEN);
