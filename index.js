@@ -15,10 +15,11 @@ const client = new Client({
 // ======================
 const BYPASS_ROLE_ID = "1510749036179755101";
 const MUTE_ROLE_ID = "1512296321334378567";
+const AUDIT_CHANNEL_ID = "1510749041061920867";
 const DATA_FILE = "./logs.json";
 
 // ======================
-// SAFE DATABASE
+// DB
 // ======================
 function loadData() {
     try {
@@ -34,7 +35,7 @@ function saveData(data) {
     try {
         fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
     } catch (err) {
-        console.log("SAVE ERROR:", err);
+        console.log(err);
     }
 }
 
@@ -45,12 +46,27 @@ let logs = loadData();
 // ======================
 function generateCase() {
     let total = 0;
-
-    for (const user in logs) {
-        total += logs[user]?.cases?.length || 0;
+    for (const u in logs) {
+        total += logs[u]?.cases?.length || 0;
     }
-
     return `CASE-${String(total + 1).padStart(4, "0")}`;
+}
+
+// ======================
+// AUDIT LOGGER
+// ======================
+function auditLog(guild, title, fields) {
+    const channel = guild.channels.cache.get(AUDIT_CHANNEL_ID);
+    if (!channel) return;
+
+    channel.send({
+        embeds: [{
+            color: 0xff0000,
+            title,
+            fields,
+            timestamp: new Date()
+        }]
+    }).catch(() => {});
 }
 
 // ======================
@@ -65,23 +81,18 @@ client.once('ready', () => {
 // MUTE SYSTEM
 // ======================
 async function mute(member, ms = 300000) {
-    try {
-        const role = member.guild.roles.cache.get(MUTE_ROLE_ID);
-        if (!role) return;
+    const role = member.guild.roles.cache.get(MUTE_ROLE_ID);
+    if (!role) return;
 
-        await member.roles.add(role);
+    await member.roles.add(role);
 
-        setTimeout(() => {
-            member.roles.remove(role).catch(() => {});
-        }, ms);
-
-    } catch (err) {
-        console.log(err);
-    }
+    setTimeout(() => {
+        member.roles.remove(role).catch(() => {});
+    }, ms);
 }
 
 // ======================
-// GET USER DATA
+// USER DATA
 // ======================
 function getUser(id) {
     if (!logs[id]) {
@@ -98,16 +109,17 @@ function getUser(id) {
 }
 
 // ======================
-// ANTI-ABUSE SYSTEM
+// ANTI ABUSE SYSTEM
 // ======================
 client.on('messageCreate', async (message) => {
 
     if (!message.guild || message.author.bot) return;
 
     const member = message.member;
-    const userId = message.author.id;
 
     if (member.roles.cache.has(BYPASS_ROLE_ID)) return;
+
+    const userId = message.author.id;
 
     const link = /(https?:\/\/[^\s]+)/gi.test(message.content);
     const ping = message.mentions.everyone || message.content.includes("@here");
@@ -124,38 +136,51 @@ client.on('messageCreate', async (message) => {
     message.delete().catch(() => {});
 
     const user = getUser(userId);
+    const caseId = generateCase();
 
     user.strikes++;
     user.warnings++;
 
-    const caseId = generateCase();
     user.cases.push(`${caseId}: WARNING - ${reason}`);
 
-    message.channel.send(`⚠️ <@${userId}> Warning (${user.strikes}/3): ${reason} | ${caseId}`);
+    message.channel.send(`⚠️ <@${userId}> Warning (${user.strikes}/3) | ${caseId}`);
+
+    // AUDIT LOG
+    auditLog(message.guild, "⚠️ Warning Issued", [
+        { name: "User", value: `<@${userId}>`, inline: true },
+        { name: "Reason", value: reason, inline: true },
+        { name: "Case", value: caseId, inline: true }
+    ]);
 
     if (user.strikes >= 3) {
+
         user.mutes++;
-
         const muteCase = generateCase();
-        user.cases.push(`${muteCase}: MUTE (5m) - 3 strikes`);
 
-        message.channel.send(`🔇 <@${userId}> muted for 5 minutes | ${muteCase}`);
+        user.cases.push(`${muteCase}: MUTE (5m)`);
 
         await mute(member, 300000);
 
         user.strikes = 0;
+
+        message.channel.send(`🔇 <@${userId}> muted for 5 minutes | ${muteCase}`);
+
+        auditLog(message.guild, "🔇 User Muted", [
+            { name: "User", value: `<@${userId}>`, inline: true },
+            { name: "Duration", value: "5 minutes", inline: true },
+            { name: "Case", value: muteCase, inline: true }
+        ]);
     }
 
     saveData(logs);
 });
 
 // ======================
-// !MLOGS SYSTEM (CLEAN FIXED)
+// MLOGS SYSTEM
 // ======================
 client.on('messageCreate', async (message) => {
 
     if (!message.guild || message.author.bot) return;
-
     if (!message.content.startsWith("!mlogs")) return;
 
     const args = message.content.trim().split(/ +/);
@@ -171,7 +196,7 @@ client.on('messageCreate', async (message) => {
         const user = target || message.author;
         const data = logs[user.id];
 
-        if (!data) return message.channel.send("📊 No logs found.");
+        if (!data) return message.channel.send("No logs found.");
 
         return message.channel.send({
             embeds: [{
@@ -189,18 +214,13 @@ client.on('messageCreate', async (message) => {
         });
     }
 
-    // ======================
-    // VALIDATION
-    // ======================
-    if (!target) {
-        return message.channel.send("⚠️ Mention a user.");
-    }
+    if (!target) return message.channel.send("Mention a user.");
 
     const user = getUser(target.id);
     const caseId = generateCase();
 
     // ======================
-    // ADD SYSTEM
+    // ADD
     // ======================
     if (sub === "add") {
 
@@ -211,13 +231,19 @@ client.on('messageCreate', async (message) => {
 
         user.cases.push(`${caseId}: MANUAL ADD - ${type.toUpperCase()}`);
 
+        auditLog(message.guild, "➕ Manual Add", [
+            { name: "User", value: `<@${target.id}>`, inline: true },
+            { name: "Type", value: type, inline: true },
+            { name: "Case", value: caseId, inline: true }
+        ]);
+
         saveData(logs);
 
-        return message.channel.send(`✅ Added ${type} | ${caseId}`);
+        return message.channel.send(`Added ${type} | ${caseId}`);
     }
 
     // ======================
-    // REMOVE SYSTEM
+    // REMOVE
     // ======================
     if (sub === "remove") {
 
@@ -228,37 +254,40 @@ client.on('messageCreate', async (message) => {
 
         user.cases.push(`${caseId}: MANUAL REMOVE - ${type.toUpperCase()}`);
 
+        auditLog(message.guild, "🧹 Manual Remove", [
+            { name: "User", value: `<@${target.id}>`, inline: true },
+            { name: "Type", value: type, inline: true },
+            { name: "Case", value: caseId, inline: true }
+        ]);
+
         saveData(logs);
 
-        return message.channel.send(`🧹 Removed ${type} | ${caseId}`);
+        return message.channel.send(`Removed ${type} | ${caseId}`);
     }
 
-    return message.channel.send("❌ Use: !mlogs | !mlogs add/remove strike @user");
+    return message.channel.send("Use !mlogs or !mlogs add/remove type @user");
 });
 
 // ======================
-// HELP COMMAND
+// HELP
 // ======================
 client.on('messageCreate', async (message) => {
 
-    if (message.author.bot || !message.guild) return;
+    if (message.content !== "!help") return;
 
-    if (message.content === "!help") {
-
-        message.channel.send({
-            embeds: [{
-                color: 0x00ff00,
-                title: "🚔 THP Bot Commands",
-                fields: [
-                    { name: "!mlogs @user", value: "View logs" },
-                    { name: "!mlogs add strike @user", value: "Add punishment" },
-                    { name: "!mlogs remove strike @user", value: "Remove punishment" },
-                    { name: "Types", value: "strike, warn, kick, ban" }
-                ],
-                footer: { text: "Managed by Duck" }
-            }]
-        });
-    }
+    message.channel.send({
+        embeds: [{
+            color: 0x00ff00,
+            title: "🚔 Commands",
+            fields: [
+                { name: "!mlogs @user", value: "View logs" },
+                { name: "!mlogs add strike @user", value: "Add punishment" },
+                { name: "!mlogs remove strike @user", value: "Remove punishment" },
+                { name: "Types", value: "strike, warn, kick, ban" }
+            ],
+            footer: { text: "Managed by Duck" }
+        }]
+    });
 });
 
 client.login(process.env.TOKEN);
