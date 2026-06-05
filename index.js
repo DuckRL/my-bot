@@ -14,16 +14,17 @@ const client = new Client({
 // CONFIG
 // ======================
 const BYPASS_ROLE_ID = "1510749036179755101";
+const MUTE_ROLE_ID = "1512296321334378567";
 const DATA_FILE = "./logs.json";
 
 // ======================
-// SAFE DATA HANDLING
+// SAFE FILE SYSTEM
 // ======================
 function loadData() {
     try {
         if (!fs.existsSync(DATA_FILE)) return {};
-        const raw = fs.readFileSync(DATA_FILE, 'utf8');
-        return raw ? JSON.parse(raw) : {};
+        const data = fs.readFileSync(DATA_FILE, 'utf8');
+        return data ? JSON.parse(data) : {};
     } catch (err) {
         console.log("LOAD ERROR:", err);
         return {};
@@ -38,8 +39,7 @@ function saveData(data) {
     }
 }
 
-// load database
-let strikes = loadData();
+let logs = loadData();
 
 // ======================
 // READY EVENT
@@ -50,17 +50,17 @@ client.once('ready', () => {
 });
 
 // ======================
-// MUTE FUNCTION
+// MUTE SYSTEM
 // ======================
 async function muteMember(member, timeMs = 300000) {
     try {
-        const muteRole = member.guild.roles.cache.find(r => r.name === "Muted");
-        if (!muteRole) return;
+        const role = member.guild.roles.cache.get(MUTE_ROLE_ID);
+        if (!role) return;
 
-        await member.roles.add(muteRole);
+        await member.roles.add(role);
 
         setTimeout(() => {
-            member.roles.remove(muteRole).catch(() => {});
+            member.roles.remove(role).catch(() => {});
         }, timeMs);
 
     } catch (err) {
@@ -69,7 +69,7 @@ async function muteMember(member, timeMs = 300000) {
 }
 
 // ======================
-// MESSAGE SYSTEM (ANTI-ABUSE)
+// ANTI-ABUSE SYSTEM
 // ======================
 client.on('messageCreate', async (message) => {
 
@@ -77,12 +77,12 @@ client.on('messageCreate', async (message) => {
     if (!message.guild) return;
 
     const member = message.member;
+    const userId = message.author.id;
+
     const hasBypass = member.roles.cache.has(BYPASS_ROLE_ID);
     if (hasBypass) return;
 
-    const userId = message.author.id;
-
-    let userData = strikes[userId] || {
+    let user = logs[userId] || {
         strikes: 0,
         warnings: 0,
         mutes: 0,
@@ -92,44 +92,37 @@ client.on('messageCreate', async (message) => {
 
     const linkRegex = /(https?:\/\/[^\s]+)/gi;
 
-    let violation = false;
-    let reason = "";
+    let reason = null;
 
-    // LINK CHECK
     if (linkRegex.test(message.content)) {
-        violation = true;
         reason = "Sending links";
     }
 
-    // MASS PING CHECK
     if (message.mentions.everyone || message.content.includes("@here")) {
-        violation = true;
         reason = "Mass pinging";
     }
 
-    // BASIC SPAM CHECK
     if (message.content.split(' ').length > 30) {
-        violation = true;
         reason = "Spam detected";
     }
 
-    if (!violation) return;
+    if (!reason) return;
 
     // DELETE MESSAGE
     message.delete().catch(() => {});
 
     // UPDATE STATS
-    userData.strikes += 1;
-    userData.warnings += 1;
+    user.strikes += 1;
+    user.warnings += 1;
 
     message.channel.send(
-        `⚠️ <@${userId}> Warning (${userData.strikes}/3): ${reason}`
+        `⚠️ <@${userId}> Warning (${user.strikes}/3): ${reason}`
     );
 
-    // 3 STRIKES = MUTE
-    if (userData.strikes >= 3) {
+    // MUTE AT 3 STRIKES
+    if (user.strikes >= 3) {
 
-        userData.mutes += 1;
+        user.mutes += 1;
 
         message.channel.send(
             `🔇 <@${userId}> muted for 5 minutes (3 strikes reached).`
@@ -137,12 +130,11 @@ client.on('messageCreate', async (message) => {
 
         await muteMember(member, 300000);
 
-        userData.strikes = 0;
+        user.strikes = 0;
     }
 
-    // SAVE DATA
-    strikes[userId] = userData;
-    saveData(strikes);
+    logs[userId] = user;
+    saveData(logs);
 });
 
 // ======================
@@ -156,7 +148,7 @@ client.on('messageCreate', async (message) => {
     if (!message.content.startsWith('!mlogs')) return;
 
     const target = message.mentions.users.first() || message.author;
-    const data = strikes[target.id];
+    const data = logs[target.id];
 
     if (!data) {
         return message.channel.send(`📊 No logs found for ${target.tag}`);
