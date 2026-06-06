@@ -10,8 +10,6 @@ const {
     ChannelType
 } = require("discord.js");
 
-const fs = require("fs");
-
 // ======================
 // CLIENT
 // ======================
@@ -23,6 +21,16 @@ const client = new Client({
         GatewayIntentBits.GuildMembers
     ]
 });
+
+// ======================
+// ROLE CONFIG (YOUR IDS)
+// ======================
+const ROLES = {
+    moderation: "1478071048456110241",
+    administration: "1478071048456110247",
+    management: "1478071048464502867",
+    foundership: "1478071048464502875"
+};
 
 // ======================
 // CONFIG
@@ -39,7 +47,6 @@ const STAFF_ROLE_ID = "1478071048464502867";
 const SETUP_ROLE_ID = "1478071048476819661";
 
 const MOD_LOG_CHANNEL_ID = "1478071050569908280";
-const TRANSCRIPT_CHANNEL_ID = "1512885389675860018";
 
 const TIMEOUT_MS = 5 * 60 * 1000;
 
@@ -70,8 +77,10 @@ async function dm(user, embed) {
     } catch {}
 }
 
+const hasRole = (member, role) => member.roles.cache.has(role);
+
 // ======================
-// COMMAND HANDLER
+// MESSAGE COMMANDS
 // ======================
 client.on("messageCreate", async (message) => {
     if (!message.guild || message.author.bot) return;
@@ -79,252 +88,282 @@ client.on("messageCreate", async (message) => {
     const args = message.content.split(" ");
     const cmd = args[0];
 
-// ======================
-// HELP COMMAND
-// ======================
-if (cmd === "!help") {
+    // ======================
+    // HELP (RANK BASED)
+    // ======================
+    if (cmd === "!help") {
 
-    const embed = new EmbedBuilder()
-        .setTitle("📘 Server Bot Help")
-        .setColor(0x00aaff)
-        .addFields(
-            {
-                name: "🚔 Moderation",
+        const member = message.member;
+
+        let fields = [];
+
+        if (
+            hasRole(member, ROLES.moderation) ||
+            hasRole(member, ROLES.administration) ||
+            hasRole(member, ROLES.management) ||
+            hasRole(member, ROLES.foundership)
+        ) {
+            fields.push({
+                name: "🛡️ Moderation",
+                value:
+`!warn @user reason
+!unwarn @user
+!mute @user reason
+!unmute @user`
+            });
+        }
+
+        if (
+            hasRole(member, ROLES.administration) ||
+            hasRole(member, ROLES.management) ||
+            hasRole(member, ROLES.foundership)
+        ) {
+            fields.push({
+                name: "🚔 Administration",
+                value:
+`!kick @user reason
+!tempban @user minutes reason`
+            });
+        }
+
+        if (
+            hasRole(member, ROLES.management) ||
+            hasRole(member, ROLES.foundership)
+        ) {
+            fields.push({
+                name: "🏛️ Management",
                 value:
 `!ban @user reason
-!kick @user reason
-!mute @user reason
-!unmute @user
-!warn @user reason
-!unwarn @user
-!tempban @user minutes reason
-!unban userID`
-            },
-            {
-                name: "🎟️ Tickets",
-                value:
-`!tsetup → create ticket panel
-Dropdown → open ticket`
-            }
-        )
-        .setFooter({ text: "Managed by Duck" });
+!unban userID
+!tsetup`
+            });
+        }
 
-    return message.channel.send({ embeds: [embed] });
-}
+        if (hasRole(member, ROLES.foundership)) {
+            fields.push({
+                name: "👑 Foundership",
+                value: "Full bot access"
+            });
+        }
 
-// ======================
-// TICKET SETUP
-// ======================
-if (cmd === "!tsetup") {
+        if (!fields.length)
+            return message.reply("No command access.");
 
-    if (!message.member.roles.cache.has(SETUP_ROLE_ID))
-        return message.reply("❌ No permission.");
+        return message.channel.send({
+            embeds: [
+                new EmbedBuilder()
+                    .setTitle("📘 Command Center")
+                    .setColor(0x00aaff)
+                    .addFields(fields)
+            ]
+        });
+    }
 
-    const embed = new EmbedBuilder()
-        .setTitle("🎟️ New York City Ticket System")
-        .setDescription("Select a category below.")
-        .setColor(0x2b2d31);
+    // ======================
+    // TICKET SETUP
+    // ======================
+    if (cmd === "!tsetup") {
 
-    const menu = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-            .setCustomId("ticket_menu")
-            .setPlaceholder("Select category")
-            .addOptions(
-                { label: "General", value: "general" },
-                { label: "Partnership", value: "partnership" },
-                { label: "Management", value: "management" }
+        if (!hasRole(message.member, ROLES.management) &&
+            !hasRole(message.member, ROLES.foundership))
+            return message.reply("No permission.");
+
+        const embed = new EmbedBuilder()
+            .setTitle("🎟️ New York City Tickets")
+            .setDescription("Select a category to open a ticket.")
+            .setColor(0x2b2d31);
+
+        const menu = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId("ticket_menu")
+                .setPlaceholder("Select category")
+                .addOptions(
+                    { label: "General", value: "general" },
+                    { label: "Partnership", value: "partnership" },
+                    { label: "Management", value: "management" }
+                )
+        );
+
+        const ch = message.guild.channels.cache.get(PANEL_CHANNEL_ID);
+        if (!ch) return;
+
+        ch.send({ embeds: [embed], components: [menu] });
+
+        return message.reply("Panel sent.");
+    }
+
+    // ======================
+    // BAN
+    // ======================
+    if (cmd === "!ban") {
+
+        if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = args.slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention user");
+
+        await user.ban({ reason });
+
+        const embed = new EmbedBuilder()
+            .setTitle("⛔ Banned")
+            .setDescription(user.user.tag)
+            .addFields({ name: "Reason", value: reason })
+            .setColor(0xff0000);
+
+        await dm(user.user, embed);
+        log(message.guild, embed);
+
+        message.channel.send("User banned.");
+    }
+
+    // ======================
+    // UNBAN
+    // ======================
+    if (cmd === "!unban") {
+
+        if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
+
+        const id = args[1];
+        if (!id) return message.reply("Provide ID");
+
+        await message.guild.members.unban(id).catch(() => {
+            return message.reply("Invalid ID");
+        });
+
+        message.channel.send("Unbanned.");
+    }
+
+    // ======================
+    // KICK
+    // ======================
+    if (cmd === "!kick") {
+
+        if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = args.slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention user");
+
+        await user.kick(reason);
+
+        const embed = new EmbedBuilder()
+            .setTitle("👢 Kicked")
+            .setColor(0xffff00);
+
+        await dm(user.user, embed);
+        log(message.guild, embed);
+
+        message.channel.send("Kicked.");
+    }
+
+    // ======================
+    // MUTE (TIMEOUT)
+    // ======================
+    if (cmd === "!mute") {
+
+        if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = args.slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention user");
+
+        await user.timeout(TIMEOUT_MS, reason);
+
+        const embed = new EmbedBuilder()
+            .setTitle("🔇 Muted")
+            .setColor(0xffa500);
+
+        await dm(user.user, embed);
+        log(message.guild, embed);
+
+        message.channel.send("Muted.");
+    }
+
+    // ======================
+    // UNMUTE
+    // ======================
+    if (cmd === "!unmute") {
+
+        if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
+
+        const user = message.mentions.members.first();
+        if (!user) return message.reply("Mention user");
+
+        await user.timeout(null);
+
+        message.channel.send("Unmuted.");
+    }
+
+    // ======================
+    // WARN
+    // ======================
+    if (cmd === "!warn") {
+
+        if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = args.slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention user");
+
+        let count = warns.get(user.id) || 0;
+        count++;
+        warns.set(user.id, count);
+
+        const embed = new EmbedBuilder()
+            .setTitle("⚠️ Warned")
+            .addFields(
+                { name: "Reason", value: reason },
+                { name: "Warnings", value: `${count}` }
             )
-    );
+            .setColor(0xffcc00);
 
-    const channel = message.guild.channels.cache.get(PANEL_CHANNEL_ID);
-    if (!channel) return;
+        await dm(user.user, embed);
+        log(message.guild, embed);
 
-    channel.send({ embeds: [embed], components: [menu] });
+        message.channel.send(`Warned ${user.user.tag}`);
+    }
 
-    return message.reply("Panel sent.");
-}
+    // ======================
+    // UNWARN
+    // ======================
+    if (cmd === "!unwarn") {
 
-// ======================
-// BAN
-// ======================
-if (cmd === "!ban") {
+        const user = message.mentions.members.first();
+        if (!user) return message.reply("Mention user");
 
-    if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
+        let count = warns.get(user.id) || 0;
+        if (count <= 0) return message.reply("No warns");
 
-    const user = message.mentions.members.first();
-    const reason = args.slice(2).join(" ") || "No reason";
+        count--;
+        warns.set(user.id, count);
 
-    if (!user) return message.reply("Mention user");
+        message.channel.send("Warn removed.");
+    }
 
-    await user.ban({ reason });
+    // ======================
+    // TEMPBAN
+    // ======================
+    if (cmd === "!tempban") {
 
-    const embed = new EmbedBuilder()
-        .setTitle("⛔ Banned")
-        .setDescription(user.user.tag)
-        .addFields({ name: "Reason", value: reason })
-        .setColor(0xff0000);
+        const user = message.mentions.members.first();
+        const mins = parseInt(args[2]);
+        const reason = args.slice(3).join(" ") || "No reason";
 
-    await dm(user.user, embed);
-    log(message.guild, embed);
+        if (!user || !mins) return message.reply("!tempban @user mins reason");
 
-    return message.channel.send("User banned.");
-}
+        await user.ban({ reason });
 
-// ======================
-// UNBAN
-// ======================
-if (cmd === "!unban") {
+        setTimeout(() => {
+            message.guild.members.unban(user.id).catch(() => {});
+        }, mins * 60000);
 
-    if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
-
-    const id = args[1];
-    if (!id) return message.reply("Provide user ID");
-
-    await message.guild.members.unban(id).catch(() => {
-        return message.reply("Invalid ID or not banned.");
-    });
-
-    return message.channel.send("User unbanned.");
-}
-
-// ======================
-// KICK
-// ======================
-if (cmd === "!kick") {
-
-    if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return;
-
-    const user = message.mentions.members.first();
-    const reason = args.slice(2).join(" ") || "No reason";
-
-    if (!user) return message.reply("Mention user");
-
-    await user.kick(reason);
-
-    const embed = new EmbedBuilder()
-        .setTitle("👢 Kicked")
-        .setDescription(user.user.tag)
-        .addFields({ name: "Reason", value: reason })
-        .setColor(0xffff00);
-
-    await dm(user.user, embed);
-    log(message.guild, embed);
-
-    return message.channel.send("User kicked.");
-}
-
-// ======================
-// TIMEOUT MUTE
-// ======================
-if (cmd === "!mute") {
-
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
-
-    const user = message.mentions.members.first();
-    const reason = args.slice(2).join(" ") || "No reason";
-
-    if (!user) return message.reply("Mention user");
-
-    await user.timeout(TIMEOUT_MS, reason);
-
-    const embed = new EmbedBuilder()
-        .setTitle("🔇 Muted")
-        .setDescription(user.user.tag)
-        .addFields({ name: "Reason", value: reason })
-        .setColor(0xffa500);
-
-    await dm(user.user, embed);
-    log(message.guild, embed);
-
-    return message.channel.send("User muted.");
-}
-
-// ======================
-// UNMUTE
-// ======================
-if (cmd === "!unmute") {
-
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
-
-    const user = message.mentions.members.first();
-    if (!user) return message.reply("Mention user");
-
-    await user.timeout(null);
-
-    return message.channel.send("User unmuted.");
-}
-
-// ======================
-// WARN
-// ======================
-if (cmd === "!warn") {
-
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
-
-    const user = message.mentions.members.first();
-    const reason = args.slice(2).join(" ") || "No reason";
-
-    if (!user) return message.reply("Mention user");
-
-    let count = warns.get(user.id) || 0;
-    count++;
-    warns.set(user.id, count);
-
-    const embed = new EmbedBuilder()
-        .setTitle("⚠️ Warned")
-        .addFields(
-            { name: "Reason", value: reason },
-            { name: "Warnings", value: `${count}` }
-        )
-        .setColor(0xffcc00);
-
-    await dm(user.user, embed);
-    log(message.guild, embed);
-
-    return message.channel.send(`Warned ${user.user.tag}`);
-}
-
-// ======================
-// UNWARN
-// ======================
-if (cmd === "!unwarn") {
-
-    if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
-
-    const user = message.mentions.members.first();
-    if (!user) return message.reply("Mention user");
-
-    let count = warns.get(user.id) || 0;
-
-    if (count <= 0) return message.reply("No warnings");
-
-    count--;
-    warns.set(user.id, count);
-
-    return message.channel.send(`Warning removed (${count})`);
-}
-
-// ======================
-// TEMPBAN
-// ======================
-if (cmd === "!tempban") {
-
-    if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
-
-    const user = message.mentions.members.first();
-    const minutes = parseInt(args[2]);
-    const reason = args.slice(3).join(" ") || "No reason";
-
-    if (!user || !minutes) return message.reply("!tempban @user minutes reason");
-
-    await user.ban({ reason });
-
-    setTimeout(() => {
-        message.guild.members.unban(user.id).catch(() => {});
-    }, minutes * 60000);
-
-    return message.channel.send("Tempbanned user.");
-}
+        message.channel.send("Tempbanned.");
+    }
 });
 
 // ======================
@@ -349,13 +388,13 @@ client.on("interactionCreate", async (interaction) => {
             ]
         });
 
-        const embed = new EmbedBuilder()
-            .setTitle("🎟️ Ticket Opened")
-            .setColor(0x00ff99);
-
         channel.send({
             content: `<@&${STAFF_ROLE_ID}>`,
-            embeds: [embed]
+            embeds: [
+                new EmbedBuilder()
+                    .setTitle("Ticket Opened")
+                    .setColor(0x00ff99)
+            ]
         });
 
         interaction.reply({ content: "Ticket created", ephemeral: true });
