@@ -3,14 +3,14 @@ const {
     GatewayIntentBits,
     ActionRowBuilder,
     StringSelectMenuBuilder,
-    EmbedBuilder,
-    PermissionsBitField,
     ButtonBuilder,
     ButtonStyle,
+    EmbedBuilder,
+    PermissionsBitField,
     ChannelType
-} = require('discord.js');
+} = require("discord.js");
 
-const fs = require('fs');
+const fs = require("fs");
 
 const client = new Client({
     intents: [
@@ -34,7 +34,11 @@ const CATEGORY_IDS = {
 
 const STAFF_ROLE_ID = "1478071048464502867";
 const SETUP_ROLE_ID = "1478071048476819661";
+
 const TRANSCRIPT_CHANNEL_ID = "1512885389675860018";
+const MOD_LOG_CHANNEL_ID = "1478071050569908280";
+
+const MUTE_ROLE_ID = "1512296321334378567";
 
 // ======================
 // STATUS
@@ -45,9 +49,23 @@ client.once("ready", () => {
 });
 
 // ======================
-// TICKET STORAGE
+// ACTIVE TICKETS
 // ======================
 const activeTickets = new Map();
+
+// ======================
+// HELPERS
+// ======================
+function sendLog(guild, embed) {
+    const ch = guild.channels.cache.get(MOD_LOG_CHANNEL_ID);
+    if (ch) ch.send({ embeds: [embed] }).catch(() => {});
+}
+
+async function dm(user, embed) {
+    try {
+        await user.send({ embeds: [embed] });
+    } catch {}
+}
 
 // ======================
 // !tsetup
@@ -55,65 +73,171 @@ const activeTickets = new Map();
 client.on("messageCreate", async (message) => {
     if (!message.guild || message.author.bot) return;
 
-    if (message.content !== "!tsetup") return;
+    if (message.content === "!tsetup") {
+        if (!message.member.roles.cache.has(SETUP_ROLE_ID))
+            return message.reply("❌ No permission.");
 
-    if (!message.member.roles.cache.has(SETUP_ROLE_ID)) {
-        return message.reply("❌ You do not have permission to use this command.");
+        const embed = new EmbedBuilder()
+            .setTitle("🎟️ New York City Ticket System")
+            .setDescription("Select a category to open a support ticket.")
+            .setColor(0x2b2d31);
+
+        const menu = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId("ticket_menu")
+                .setPlaceholder("Choose a category")
+                .addOptions(
+                    { label: "General Support", value: "general", emoji: "📋" },
+                    { label: "Partnership", value: "partnership", emoji: "🤝" },
+                    { label: "Management", value: "management", emoji: "👑" }
+                )
+        );
+
+        const channel = message.guild.channels.cache.get(PANEL_CHANNEL_ID);
+        if (!channel) return;
+
+        channel.send({ embeds: [embed], components: [menu] });
+
+        message.reply("Ticket panel sent.");
     }
 
-    const embed = new EmbedBuilder()
-        .setTitle("🎟️ New York City Ticket System")
-        .setDescription(
-            "Welcome to NYCRP Support.\n\n" +
-            "Select a category below to open a private ticket.\n" +
-            "Our staff will assist you shortly."
-        )
-        .setColor(0x2b2d31);
+    // ======================
+    // MODERATION COMMANDS
+    // ======================
 
-    const menu = new ActionRowBuilder().addComponents(
-        new StringSelectMenuBuilder()
-            .setCustomId("ticket_select")
-            .setPlaceholder("Select a ticket category")
-            .addOptions(
-                { label: "General Support", value: "general", emoji: "📋" },
-                { label: "Partnership Support", value: "partnership", emoji: "🤝" },
-                { label: "Management Support", value: "management", emoji: "👑" }
+    // BAN
+    if (message.content.startsWith("!ban")) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = message.content.split(" ").slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention a user");
+
+        await user.ban({ reason });
+
+        const embed = new EmbedBuilder()
+            .setTitle("⛔ Banned")
+            .setDescription(`${user.user.tag} was banned`)
+            .addFields({ name: "Reason", value: reason })
+            .setColor(0xff0000);
+
+        await dm(user.user, embed);
+        sendLog(message.guild, embed);
+
+        message.channel.send("User banned.");
+    }
+
+    // KICK
+    if (message.content.startsWith("!kick")) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.KickMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = message.content.split(" ").slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention a user");
+
+        await user.kick(reason);
+
+        const embed = new EmbedBuilder()
+            .setTitle("👢 Kicked")
+            .addFields({ name: "Reason", value: reason })
+            .setColor(0xffff00);
+
+        await dm(user.user, embed);
+        sendLog(message.guild, embed);
+
+        message.channel.send("User kicked.");
+    }
+
+    // MUTE
+    if (message.content.startsWith("!mute")) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = message.content.split(" ").slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention a user");
+
+        await user.roles.add(MUTE_ROLE_ID);
+
+        const embed = new EmbedBuilder()
+            .setTitle("🔇 Muted")
+            .addFields({ name: "Reason", value: reason })
+            .setColor(0xffa500);
+
+        await dm(user.user, embed);
+        sendLog(message.guild, embed);
+
+        message.channel.send("User muted.");
+    }
+
+    // WARN
+    if (message.content.startsWith("!warn")) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.ModerateMembers)) return;
+
+        const user = message.mentions.members.first();
+        const reason = message.content.split(" ").slice(2).join(" ") || "No reason";
+
+        if (!user) return message.reply("Mention a user");
+
+        const embed = new EmbedBuilder()
+            .setTitle("⚠️ Warned")
+            .addFields({ name: "Reason", value: reason })
+            .setColor(0xffcc00);
+
+        await dm(user.user, embed);
+        sendLog(message.guild, embed);
+
+        message.channel.send("User warned.");
+    }
+
+    // TEMPBAN
+    if (message.content.startsWith("!tempban")) {
+        if (!message.member.permissions.has(PermissionsBitField.Flags.BanMembers)) return;
+
+        const args = message.content.split(" ");
+        const user = message.mentions.members.first();
+        const time = parseInt(args[2]);
+        const reason = args.slice(3).join(" ") || "No reason";
+
+        if (!user || !time) return message.reply("!tempban @user minutes reason");
+
+        await user.ban({ reason });
+
+        setTimeout(() => {
+            message.guild.members.unban(user.id).catch(() => {});
+        }, time * 60000);
+
+        const embed = new EmbedBuilder()
+            .setTitle("⏳ Tempbanned")
+            .addFields(
+                { name: "Time", value: `${time} min` },
+                { name: "Reason", value: reason }
             )
-    );
+            .setColor(0x8b0000);
 
-    const channel = message.guild.channels.cache.get(PANEL_CHANNEL_ID);
-    if (!channel) return message.reply("Panel channel not found.");
+        await dm(user.user, embed);
+        sendLog(message.guild, embed);
 
-    channel.send({ embeds: [embed], components: [menu] });
-
-    message.reply("✅ Ticket panel created.");
+        message.channel.send("User tempbanned.");
+    }
 });
 
 // ======================
-// CREATE TICKET
+// TICKET SYSTEM
 // ======================
 client.on("interactionCreate", async (interaction) => {
 
-    // ======================
-    // DROPDOWN
-    // ======================
-    if (interaction.isStringSelectMenu() && interaction.customId === "ticket_select") {
+    // dropdown
+    if (interaction.isStringSelectMenu() && interaction.customId === "ticket_menu") {
 
         const type = interaction.values[0];
-
-        if (activeTickets.has(interaction.user.id)) {
-            return interaction.reply({
-                content: "❌ You already have an open ticket.",
-                ephemeral: true
-            });
-        }
-
-        const category = CATEGORY_IDS[type];
 
         const channel = await interaction.guild.channels.create({
             name: `${type}-${interaction.user.username}`,
             type: ChannelType.GuildText,
-            parent: category,
+            parent: CATEGORY_IDS[type],
             permissionOverwrites: [
                 {
                     id: interaction.guild.id,
@@ -121,42 +245,28 @@ client.on("interactionCreate", async (interaction) => {
                 },
                 {
                     id: interaction.user.id,
-                    allow: [
-                        PermissionsBitField.Flags.ViewChannel,
-                        PermissionsBitField.Flags.SendMessages,
-                        PermissionsBitField.Flags.ReadMessageHistory
-                    ]
+                    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
                 },
                 {
                     id: STAFF_ROLE_ID,
-                    allow: [
-                        PermissionsBitField.Flags.ViewChannel,
-                        PermissionsBitField.Flags.SendMessages,
-                        PermissionsBitField.Flags.ReadMessageHistory
-                    ]
+                    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages]
                 }
             ]
         });
 
-        activeTickets.set(interaction.user.id, channel.id);
-
         const embed = new EmbedBuilder()
             .setTitle("🎟️ Ticket Opened")
-            .setDescription(
-                `Category: **${type}**\n` +
-                `User: <@${interaction.user.id}>\n\n` +
-                `A staff member has been notified.`
-            )
+            .setDescription("A staff member will assist you soon.")
             .setColor(0x00ff99);
 
         const buttons = new ActionRowBuilder().addComponents(
             new ButtonBuilder()
-                .setCustomId("claim_ticket")
+                .setCustomId("claim")
                 .setLabel("Claim")
                 .setStyle(ButtonStyle.Primary),
 
             new ButtonBuilder()
-                .setCustomId("close_ticket")
+                .setCustomId("close")
                 .setLabel("Close")
                 .setStyle(ButtonStyle.Danger)
         );
@@ -167,69 +277,50 @@ client.on("interactionCreate", async (interaction) => {
             components: [buttons]
         });
 
-        return interaction.reply({
-            content: `✅ Ticket created: ${channel}`,
-            ephemeral: true
-        });
+        return interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
     }
 
-    // ======================
-    // CLAIM BUTTON
-    // ======================
-    if (interaction.isButton() && interaction.customId === "claim_ticket") {
+    // CLAIM
+    if (interaction.isButton() && interaction.customId === "claim") {
+        if (!interaction.member.roles.cache.has(STAFF_ROLE_ID)) return;
 
-        if (!interaction.member.roles.cache.has(STAFF_ROLE_ID)) {
-            return interaction.reply({ content: "❌ Staff only.", ephemeral: true });
-        }
-
-        const embed = EmbedBuilder.from(interaction.message.embeds[0]);
-
-        embed.addFields({ name: "Claimed By", value: `<@${interaction.user.id}>` });
-
-        await interaction.message.edit({ embeds: [embed] });
-
-        return interaction.reply({
-            content: `✅ Ticket claimed by <@${interaction.user.id}>`,
-            ephemeral: false
+        const embed = interaction.message.embeds[0];
+        const newEmbed = EmbedBuilder.from(embed).addFields({
+            name: "Claimed By",
+            value: `<@${interaction.user.id}>`
         });
+
+        interaction.message.edit({ embeds: [newEmbed] });
+
+        interaction.reply({ content: "Claimed", ephemeral: true });
     }
 
-    // ======================
-    // CLOSE BUTTON
-    // ======================
-    if (interaction.isButton() && interaction.customId === "close_ticket") {
+    // CLOSE
+    if (interaction.isButton() && interaction.customId === "close") {
+        if (!interaction.member.roles.cache.has(STAFF_ROLE_ID)) return;
 
-        if (!interaction.member.roles.cache.has(STAFF_ROLE_ID)) {
-            return interaction.reply({ content: "❌ Staff only.", ephemeral: true });
-        }
-
-        await interaction.reply({ content: "🔒 Closing ticket...", ephemeral: true });
+        await interaction.reply("Closing ticket...");
 
         const messages = await interaction.channel.messages.fetch({ limit: 100 });
+
         const transcript = messages
             .map(m => `[${m.author.tag}] ${m.content}`)
             .reverse()
             .join("\n");
 
-        const file = `./${interaction.channel.id}.txt`;
-        fs.writeFileSync(file, transcript);
+        fs.writeFileSync(`./transcript-${interaction.channel.id}.txt`, transcript);
 
-        const logChannel = interaction.guild.channels.cache.get(TRANSCRIPT_CHANNEL_ID);
+        const log = interaction.guild.channels.cache.get(TRANSCRIPT_CHANNEL_ID);
 
-        if (logChannel) {
-            logChannel.send({
-                content: `📄 Transcript for ${interaction.channel.name}`,
-                files: [file]
+        if (log) {
+            log.send({
+                content: "Ticket transcript:",
+                files: [`./transcript-${interaction.channel.id}.txt`]
             });
         }
 
-        setTimeout(() => {
-            interaction.channel.delete().catch(() => {});
-        }, 3000);
+        setTimeout(() => interaction.channel.delete(), 3000);
     }
 });
 
-// ======================
-// LOGIN
-// ======================
 client.login(process.env.TOKEN);
