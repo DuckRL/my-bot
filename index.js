@@ -1,5 +1,4 @@
-const { Client, GatewayIntentBits } = require('discord.js');
-const fs = require('fs');
+const { Client, GatewayIntentBits, ActionRowBuilder, StringSelectMenuBuilder, EmbedBuilder, PermissionsBitField } = require('discord.js');
 
 const client = new Client({
     intents: [
@@ -13,281 +12,141 @@ const client = new Client({
 // ======================
 // CONFIG
 // ======================
-const BYPASS_ROLE_ID = "1510749036179755101";
-const MUTE_ROLE_ID = "1512296321334378567";
-const AUDIT_CHANNEL_ID = "1510749041061920867";
-const DATA_FILE = "./logs.json";
+const PANEL_CHANNEL_ID = "1478071049223540844";
+
+const CATEGORIES = {
+    general: "1478071050813047013",
+    partnership: "1478071050813047014",
+    management: "1478071050813047015"
+};
+
+const STAFF_ROLE_ID = "1478071048464502867";
 
 // ======================
-// DB
+// STATUS
 // ======================
-function loadData() {
-    try {
-        if (!fs.existsSync(DATA_FILE)) return {};
-        const raw = fs.readFileSync(DATA_FILE, "utf8");
-        return raw ? JSON.parse(raw) : {};
-    } catch {
-        return {};
-    }
-}
-
-function saveData(data) {
-    try {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-    } catch (err) {
-        console.log(err);
-    }
-}
-
-let logs = loadData();
-
-// ======================
-// CASE SYSTEM
-// ======================
-function generateCase() {
-    let total = 0;
-    for (const u in logs) {
-        total += logs[u]?.cases?.length || 0;
-    }
-    return `CASE-${String(total + 1).padStart(4, "0")}`;
-}
-
-// ======================
-// AUDIT LOGGER
-// ======================
-function auditLog(guild, title, fields) {
-    const channel = guild.channels.cache.get(AUDIT_CHANNEL_ID);
-    if (!channel) return;
-
-    channel.send({
-        embeds: [{
-            color: 0xff0000,
-            title,
-            fields,
-            timestamp: new Date()
-        }]
-    }).catch(() => {});
-}
-
-// ======================
-// READY
-// ======================
-client.once('ready', () => {
+client.once("ready", () => {
     console.log(`Logged in as ${client.user.tag}`);
     client.user.setActivity("Managed by Duck");
 });
 
 // ======================
-// MUTE SYSTEM
+// TICKET PANEL COMMAND
 // ======================
-async function mute(member, ms = 300000) {
-    const role = member.guild.roles.cache.get(MUTE_ROLE_ID);
-    if (!role) return;
-
-    await member.roles.add(role);
-
-    setTimeout(() => {
-        member.roles.remove(role).catch(() => {});
-    }, ms);
-}
-
-// ======================
-// USER DATA
-// ======================
-function getUser(id) {
-    if (!logs[id]) {
-        logs[id] = {
-            strikes: 0,
-            warnings: 0,
-            mutes: 0,
-            kicks: 0,
-            bans: 0,
-            cases: []
-        };
-    }
-    return logs[id];
-}
-
-// ======================
-// ANTI ABUSE SYSTEM
-// ======================
-client.on('messageCreate', async (message) => {
-
+client.on("messageCreate", async (message) => {
     if (!message.guild || message.author.bot) return;
 
-    const member = message.member;
+    if (message.content === "!tsetup") {
 
-    if (member.roles.cache.has(BYPASS_ROLE_ID)) return;
+        const embed = new EmbedBuilder()
+            .setTitle("🎟️ New York City Ticket System")
+            .setDescription("Select a category below to create a private support ticket. Our staff team will assist you shortly.")
+            .setColor(0x2b2d31);
 
-    const userId = message.author.id;
+        const menu = new ActionRowBuilder().addComponents(
+            new StringSelectMenuBuilder()
+                .setCustomId("ticket_menu")
+                .setPlaceholder("Select a ticket category")
+                .addOptions(
+                    {
+                        label: "General Support",
+                        value: "general",
+                        emoji: "📋"
+                    },
+                    {
+                        label: "Partnership Support",
+                        value: "partnership",
+                        emoji: "🤝"
+                    },
+                    {
+                        label: "Management Support",
+                        value: "management",
+                        emoji: "👑"
+                    }
+                )
+        );
 
-    const link = /(https?:\/\/[^\s]+)/gi.test(message.content);
-    const ping = message.mentions.everyone || message.content.includes("@here");
-    const spam = message.content.split(" ").length > 30;
+        const channel = message.guild.channels.cache.get(PANEL_CHANNEL_ID);
+        if (!channel) return message.reply("Panel channel not found.");
 
-    let reason = null;
+        channel.send({ embeds: [embed], components: [menu] });
 
-    if (link) reason = "Sending links";
-    if (ping) reason = "Mass pinging";
-    if (spam) reason = "Spam detected";
-
-    if (!reason) return;
-
-    message.delete().catch(() => {});
-
-    const user = getUser(userId);
-    const caseId = generateCase();
-
-    user.strikes++;
-    user.warnings++;
-
-    user.cases.push(`${caseId}: WARNING - ${reason}`);
-
-    message.channel.send(`⚠️ <@${userId}> Warning (${user.strikes}/3) | ${caseId}`);
-
-    // AUDIT LOG
-    auditLog(message.guild, "⚠️ Warning Issued", [
-        { name: "User", value: `<@${userId}>`, inline: true },
-        { name: "Reason", value: reason, inline: true },
-        { name: "Case", value: caseId, inline: true }
-    ]);
-
-    if (user.strikes >= 3) {
-
-        user.mutes++;
-        const muteCase = generateCase();
-
-        user.cases.push(`${muteCase}: MUTE (5m)`);
-
-        await mute(member, 300000);
-
-        user.strikes = 0;
-
-        message.channel.send(`🔇 <@${userId}> muted for 5 minutes | ${muteCase}`);
-
-        auditLog(message.guild, "🔇 User Muted", [
-            { name: "User", value: `<@${userId}>`, inline: true },
-            { name: "Duration", value: "5 minutes", inline: true },
-            { name: "Case", value: muteCase, inline: true }
-        ]);
+        message.reply("Ticket panel created.");
     }
-
-    saveData(logs);
 });
 
 // ======================
-// MLOGS SYSTEM
+// TICKET CREATION
 // ======================
-client.on('messageCreate', async (message) => {
+client.on("interactionCreate", async (interaction) => {
 
-    if (!message.guild || message.author.bot) return;
-    if (!message.content.startsWith("!mlogs")) return;
+    if (!interaction.isStringSelectMenu()) return;
 
-    const args = message.content.trim().split(/ +/);
-    const sub = args[1];
-    const type = args[2];
-    const target = message.mentions.users.first();
+    if (interaction.customId === "ticket_menu") {
 
-    // ======================
-    // VIEW MODE
-    // ======================
-    if (!sub || sub.startsWith("<@")) {
+        const type = interaction.values[0];
 
-        const user = target || message.author;
-        const data = logs[user.id];
+        const category = CATEGORIES[type];
 
-        if (!data) return message.channel.send("No logs found.");
+        const channelName = `${type}-${interaction.user.username}`;
 
-        return message.channel.send({
-            embeds: [{
-                color: 0x00aaff,
-                title: `📊 Logs - ${user.tag}`,
-                fields: [
-                    { name: "Strikes", value: `${data.strikes}`, inline: true },
-                    { name: "Warnings", value: `${data.warnings}`, inline: true },
-                    { name: "Mutes", value: `${data.mutes}`, inline: true },
-                    { name: "Kicks", value: `${data.kicks}`, inline: true },
-                    { name: "Bans", value: `${data.bans}`, inline: true },
-                    { name: "Cases", value: `${data.cases.length}`, inline: true }
-                ]
-            }]
+        const channel = await interaction.guild.channels.create({
+            name: channelName,
+            type: 0,
+            parent: category,
+            permissionOverwrites: [
+                {
+                    id: interaction.guild.id,
+                    deny: [PermissionsBitField.Flags.ViewChannel]
+                },
+                {
+                    id: interaction.user.id,
+                    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory]
+                },
+                {
+                    id: STAFF_ROLE_ID,
+                    allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages, PermissionsBitField.Flags.ReadMessageHistory]
+                }
+            ]
         });
+
+        const embed = new EmbedBuilder()
+            .setTitle("🎟️ Ticket Created")
+            .setDescription(`Category: **${type}**\nUser: <@${interaction.user.id}>`)
+            .setColor(0x00ff99);
+
+        channel.send({ embeds: [embed] });
+
+        await interaction.reply({ content: `Ticket created: ${channel}`, ephemeral: true });
     }
-
-    if (!target) return message.channel.send("Mention a user.");
-
-    const user = getUser(target.id);
-    const caseId = generateCase();
-
-    // ======================
-    // ADD
-    // ======================
-    if (sub === "add") {
-
-        if (type === "strike") user.strikes++;
-        else if (type === "warn") user.warnings++;
-        else if (type === "kick") user.kicks++;
-        else if (type === "ban") user.bans++;
-
-        user.cases.push(`${caseId}: MANUAL ADD - ${type.toUpperCase()}`);
-
-        auditLog(message.guild, "➕ Manual Add", [
-            { name: "User", value: `<@${target.id}>`, inline: true },
-            { name: "Type", value: type, inline: true },
-            { name: "Case", value: caseId, inline: true }
-        ]);
-
-        saveData(logs);
-
-        return message.channel.send(`Added ${type} | ${caseId}`);
-    }
-
-    // ======================
-    // REMOVE
-    // ======================
-    if (sub === "remove") {
-
-        if (type === "strike" && user.strikes > 0) user.strikes--;
-        else if (type === "warn" && user.warnings > 0) user.warnings--;
-        else if (type === "kick" && user.kicks > 0) user.kicks--;
-        else if (type === "ban" && user.bans > 0) user.bans--;
-
-        user.cases.push(`${caseId}: MANUAL REMOVE - ${type.toUpperCase()}`);
-
-        auditLog(message.guild, "🧹 Manual Remove", [
-            { name: "User", value: `<@${target.id}>`, inline: true },
-            { name: "Type", value: type, inline: true },
-            { name: "Case", value: caseId, inline: true }
-        ]);
-
-        saveData(logs);
-
-        return message.channel.send(`Removed ${type} | ${caseId}`);
-    }
-
-    return message.channel.send("Use !mlogs or !mlogs add/remove type @user");
 });
 
 // ======================
-// HELP
+// CLOSE COMMAND
 // ======================
-client.on('messageCreate', async (message) => {
+client.on("messageCreate", async (message) => {
 
-    if (message.content !== "!help") return;
+    if (!message.guild || message.author.bot) return;
 
-    message.channel.send({
-        embeds: [{
-            color: 0x00ff00,
-            title: "🚔 Commands",
-            fields: [
-                { name: "!mlogs @user", value: "View logs" },
-                { name: "!mlogs add strike @user", value: "Add punishment" },
-                { name: "!mlogs remove strike @user", value: "Remove punishment" },
-                { name: "Types", value: "strike, warn, kick, ban" }
-            ],
-            footer: { text: "Managed by Duck" }
-        }]
-    });
+    if (message.content === "!close") {
+
+        if (!message.member.roles.cache.has(STAFF_ROLE_ID)) {
+            return message.reply("You cannot close tickets.");
+        }
+
+        if (!message.channel.name.includes("-")) {
+            return message.reply("This is not a ticket channel.");
+        }
+
+        message.channel.send("Closing ticket in 5 seconds...");
+
+        setTimeout(() => {
+            message.channel.delete().catch(() => {});
+        }, 5000);
+    }
 });
 
+// ======================
+// LOGIN
+// ======================
 client.login(process.env.TOKEN);
